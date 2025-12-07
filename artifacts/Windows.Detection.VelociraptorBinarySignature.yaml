@@ -1,0 +1,65 @@
+name: Windows.Detection.VelociraptorBinarySignature
+author: R1ch4T
+type: CLIENT
+description: |
+  Analyze the Authenticode signature of Velociraptor-like binaries,
+  extract the discovered files for offline inspection, and avoid
+  false positives by excluding the legitimate installation path
+  as well as the Velociraptor GUI local filestore.
+
+  This artifact is useful for identifying potentially malicious
+  repackaged, unsigned, or tampered Velociraptor binaries placed
+  on disk by attackers.
+
+precondition: |
+  SELECT * FROM info() WHERE OS = 'windows'
+
+parameters:
+  - name: Globs
+    description: "Glob patterns used to search for Velociraptor-like binaries (one per line)."
+    default: |
+      C:\\**\\*velo*.exe
+      D:\\**\\*velo*.exe
+      F:\\**\\*velo*.exe
+
+sources:
+  - name: VelociraptorBinarySignature
+    query: |
+
+      -- Locate binaries matching the glob expressions
+      LET candidates = SELECT
+          OSPath.String AS Binary,
+          Size
+        FROM glob(
+          globs=split(string=Globs, sep_string="\n"),
+          accessor="auto"
+        )
+        WHERE
+          Binary != NULL AND Binary != "" AND
+          -- Exclude the official Velociraptor installation
+          NOT Binary =~ '^[A-Za-z]:\\\\Program Files( \\(x86\\))?\\\\Velociraptor\\\\' AND
+          -- Exclude Velociraptor GUI local filestore
+          -- C:\Users\<user>\AppData\Local\Temp\gui_datastore\...
+          NOT Binary =~ '^C:\\\\Users\\\\[^\\\\]+\\\\AppData\\\\Local\\\\Temp\\\\gui_datastore\\\\'
+
+      -- Extract Authenticode metadata for all candidate binaries
+      LET auth = SELECT
+          Binary,
+          Size,
+          authenticode(filename=Binary) AS Authenticode
+        FROM candidates
+
+      -- Final processed output
+      SELECT
+        Binary AS path,
+        Size AS size,
+        Authenticode.SubjectName AS subject,
+        Authenticode.IssuerName AS issuer,
+        Authenticode.Trusted AS trusted,
+        if(
+          condition=Authenticode.Trusted =~ "trusted",
+          then="Valid and trusted Authenticode signature",
+          else="UNTRUSTED: Missing, invalid, or unknown signer"
+        ) AS trust_comment,
+        upload(file=Binary) AS uploaded
+      FROM auth

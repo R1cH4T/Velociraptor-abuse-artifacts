@@ -1,0 +1,46 @@
+name: Windows.Detection.VelociraptorAbuse
+author: R1ch4T
+type: CLIENT
+description: |
+  Scan Windows systems for Velociraptor-like binaries (*velo*.exe)
+  across multiple volumes. The artifact searches the locations
+  specified in the glob patterns (C:, D:, F:, etc.) and excludes:
+
+    • The legitimate Velociraptor installation under Program Files
+    • The local Velociraptor GUI filestore (gui_datastore)
+
+  Useful for detecting unauthorized or attacker-placed Velociraptor
+  binaries on disk.
+
+precondition: |
+  SELECT * FROM info() WHERE OS = 'windows'
+
+parameters:
+  - name: Globs
+    description: "Glob patterns to scan for Velociraptor-like binaries (one per line)."
+    default: |
+      C:\\**\\*velo*.exe
+      D:\\**\\*velo*.exe
+      F:\\**\\*velo*.exe
+
+sources:
+  - name: SuspiciousVelociraptorBinaries
+    query: |
+      SELECT
+        OSPath.String AS path,
+        Size AS size,
+        Mtime AS modified,
+        'Velociraptor-like binary in local volume' AS reason
+      FROM glob(
+        globs=split(string=Globs, sep_string="\n"),
+        accessor="auto"
+      )
+      WHERE
+        
+        path != NULL AND path != "" AND
+
+        NOT path =~ '^[A-Za-z]:\\\\Program Files( \\(x86\\))?\\\\Velociraptor\\\\' AND
+
+        -- Exclude Velociraptor GUI local filestore uploads
+        -- C:\Users\<user>\AppData\Local\Temp\gui_datastore\...
+        NOT path =~ '^C:\\\\Users\\\\[^\\\\]+\\\\AppData\\\\Local\\\\Temp\\\\gui_datastore\\\\'
